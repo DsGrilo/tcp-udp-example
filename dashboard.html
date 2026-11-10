@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCP x UDP</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1c222b; --muted: #687280; --line: #e2e5ea;
+    --empty: #eceef2; --tcp: #2f6fdb; --udp: #12917f; --late: #d39b12; --miss: #d64545;
+    --ctl: #8a4fd6; --ack: #8b94a1; --hl: rgba(211, 155, 18, .18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #13161b; --panel: #1b1f26; --text: #e5e8ed; --muted: #8b94a1; --line: #2a3039;
+      --empty: #252a32; --tcp: #5d95f2; --udp: #2fbfa9; --late: #e7b73a; --miss: #f06a6a;
+      --ctl: #b48cf2; --ack: #6f7885; --hl: rgba(231, 183, 58, .16);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 40px; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 6px; }
+  h1 { font-size: 22px; margin: 0; }
+  .status { font-size: 13px; color: var(--muted); }
+  .status::before { content: "●"; margin-right: 6px; color: var(--miss); }
+  .status.on::before { color: var(--udp); }
+  .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+  button {
+    margin-left: auto; font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 17px; margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .panel h2 small { font-weight: 400; font-size: 13px; color: var(--muted); }
+  .lane[data-lane="TCP"] h2 b { color: var(--tcp); }
+  .lane[data-lane="UDP"] h2 b { color: var(--udp); }
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 12px 0 14px; }
+  .stat { font-size: 12px; color: var(--muted); }
+  .stat output { display: block; font-size: 20px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(20, 1fr); gap: 3px; }
+  .cell { aspect-ratio: 1; border-radius: 3px; background: var(--empty); }
+  .lane[data-lane="TCP"] .cell.got { background: var(--tcp); }
+  .lane[data-lane="UDP"] .cell.got { background: var(--udp); }
+  .cell.got.late { background: var(--late) !important; }
+  .cell.miss { background: transparent; box-shadow: inset 0 0 0 2px var(--miss); }
+  .cell.dup { outline: 2px solid var(--text); outline-offset: -5px; }
+  .cell:hover { outline: 2px solid var(--text); outline-offset: 1px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .tl-label { font-size: 12px; color: var(--muted); margin: 14px 0 4px; }
+  canvas { width: 100%; height: 64px; display: block; }
+
+  /* ---- pacotes na rede ---- */
+  .pk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 10px 0 12px; font-size: 13px; color: var(--muted); }
+  .pk-bar label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .pk-bar .count { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .pk-ends { display: grid; grid-template-columns: 64px 1fr; font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 8px 6px; }
+  .pk-ends div { display: flex; justify-content: space-between; }
+  .pk-list { max-height: 460px; overflow-y: auto; border-top: 1px solid var(--line); }
+  .pk-empty { color: var(--muted); font-size: 14px; padding: 18px 8px; }
+  .pkt {
+    display: grid; grid-template-columns: 64px 1fr; align-items: center; height: 26px; padding: 0 8px;
+    font-size: 12px; cursor: default; color: var(--tcp);
+  }
+  .pkt:hover, .pkt.hl { background: var(--hl); }
+  .pkt .pt { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .wire { position: relative; height: 100%; margin: 0 4px; border-left: 2px solid var(--line); border-right: 2px solid var(--line); }
+  .wire::before {           /* a linha da seta */
+    content: ""; position: absolute; left: 6px; right: 6px; top: 50%; height: 2px; background: currentColor;
+  }
+  .wire::after {            /* a ponta da seta */
+    content: ""; position: absolute; top: calc(50% - 5px); border: 5px solid transparent;
+  }
+  .to-rx .wire::after { right: 0; border-left: 7px solid currentColor; border-right-width: 0; }
+  .to-tx .wire::after { left: 0; border-right: 7px solid currentColor; border-left-width: 0; }
+  .wire .lbl {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); white-space: nowrap;
+    background: var(--panel); padding: 0 6px; border-radius: 3px; color: var(--text); font-size: 12px;
+    max-width: calc(100% - 40px); overflow: hidden; text-overflow: ellipsis;
+  }
+  .pkt:hover .lbl, .pkt.hl .lbl { background: transparent; }
+  .k-data { color: var(--tcp); }
+  .k-ack { color: var(--ack); }
+  .k-ack .lbl { color: var(--muted); }
+  .k-ctl { color: var(--ctl); }
+  .k-udp { color: var(--udp); }
+  .k-dupack { color: var(--late); }
+  .k-retx { color: var(--miss); }
+  .k-retx .lbl, .k-dupack .lbl { font-weight: 600; }
+  .hide-tcp .p-TCP, .hide-udp .p-UDP, .hide-ack .k-ack { display: none; }
+
+  .tip {
+    position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 340px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .18); padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
+  }
+  .tip b { font-size: 13.5px; }
+  .tip dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 6px 0 0; }
+  .tip dt { color: var(--muted); }
+  .tip dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .tip .note { margin-top: 6px; color: var(--miss); }
+  .tip .layers { margin-top: 6px; color: var(--muted); }
+
+  @media (max-width: 640px) {
+    .grid { grid-template-columns: repeat(10, 1fr); }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .pkt, .pk-ends { grid-template-columns: 48px 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>TCP x UDP</h1>
+    <span class="status" id="status">desconectado</span>
+    <button id="clear" type="button">Limpar</button>
+  </header>
+  <p class="hint">Rode o <code>sender.py</code>. O painel limpa sozinho quando um novo teste começa (3 s sem mensagens). Passe o mouse num quadrado para achar os pacotes dele.</p>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--tcp)"></i>chegou (TCP)</span>
+    <span><i class="swatch" style="background:var(--udp)"></i>chegou (UDP)</span>
+    <span><i class="swatch" style="background:var(--late)"></i>chegou após mais de 100 ms</span>
+    <span><i class="swatch" style="box-shadow:inset 0 0 0 2px var(--miss)"></i>faltando</span>
+  </div>
+
+  <section class="panel lane" data-lane="TCP">
+    <h2><b>TCP</b><small>o que a aplicação recebeu · confiável, em ordem, fluxo de bytes</small></h2>
+    <div class="stats"></div>
+    <div class="grid"></div>
+    <div class="tl-label">Chegadas no tempo (faixas amarelas = espera &gt; 100 ms)</div>
+    <canvas></canvas>
+  </section>
+
+  <section class="panel lane" data-lane="UDP">
+    <h2><b>UDP</b><small>o que a aplicação recebeu · sem conexão, sem garantias, datagramas</small></h2>
+    <div class="stats"></div>
+    <div class="grid"></div>
+    <div class="tl-label">Chegadas no tempo (faixas amarelas = espera &gt; 100 ms)</div>
+    <canvas></canvas>
+  </section>
+
+  <section class="panel" id="packets">
+    <h2>Pacotes na rede<small>o que passou pela placa do PC, capturado pelo tshark</small></h2>
+    <div class="pk-bar">
+      <label><input type="checkbox" data-hide="tcp" checked> TCP</label>
+      <label><input type="checkbox" data-hide="udp" checked> UDP</label>
+      <label><input type="checkbox" data-hide="ack" checked> ACKs sem dados</label>
+      <span class="count" id="pk-count"></span>
+    </div>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--tcp)"></i>dados TCP</span>
+      <span><i class="swatch" style="background:var(--ack)"></i>ACK</span>
+      <span><i class="swatch" style="background:var(--ctl)"></i>SYN / FIN / RST</span>
+      <span><i class="swatch" style="background:var(--udp)"></i>datagrama UDP</span>
+      <span><i class="swatch" style="background:var(--miss)"></i>retransmissão</span>
+      <span><i class="swatch" style="background:var(--late)"></i>ACK duplicado</span>
+    </div>
+    <div class="pk-ends"><span></span><div><span>remetente (VM)</span><span>receptor (PC)</span></div></div>
+    <div class="pk-list" id="pk-list">
+      <div class="pk-empty" id="pk-empty">Aguardando pacotes… (se nada aparecer durante um teste, veja o terminal do dashboard.py)</div>
+    </div>
+  </section>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+const TOTAL = 100;        // mensagens por teste (range(1, 101) no sender.py)
+const LATE_MS = 100;      // 2x o intervalo de envio (50 ms)
+const IDLE_RESET_MS = 3000;
+const END_MS = 1500;      // sem mensagens por esse tempo = teste acabou
+
+const STATS = [
+  ["got", "recebidas"], ["miss", "faltando"], ["loss", "perda"], ["stalls", "esperas > 100 ms"],
+  ["maxInt", "maior intervalo"], ["dups", "duplicadas"],
+];
+
+function makeLane(proto) {
+  const el = document.querySelector(`.lane[data-lane="${proto}"]`);
+  const stats = {};
+  for (const [key, label] of STATS) {
+    const div = document.createElement("div");
+    div.className = "stat";
+    div.innerHTML = `<output>0</output>${label}`;
+    el.querySelector(".stats").appendChild(div);
+    stats[key] = div.querySelector("output");
+  }
+  const cells = [];
+  const grid = el.querySelector(".grid");
+  for (let i = 1; i <= TOTAL; i++) {
+    const c = document.createElement("div");
+    c.className = "cell";
+    c.dataset.seq = i;
+    grid.appendChild(c);
+    cells.push(c);
+  }
+  return { proto, el, stats, cells, canvas: el.querySelector("canvas") };
+}
+
+const lanes = { TCP: makeLane("TCP"), UDP: makeLane("UDP") };
+let origin = null;          // t do primeiro evento do teste atual
+let lastT = -Infinity;      // t do último evento (relógio do servidor)
+let lastWall = 0;           // performance.now() do último evento
+let ended = false;
+
+function resetLane(l) {
+  l.events = []; l.got = new Set(); l.maxSeq = 0; l.maxInt = 0; l.stalls = 0; l.dups = 0;
+  l.cells.forEach((c, i) => { c.className = "cell"; c.title = `seq ${i + 1}`; });
+}
+function resetAll() {
+  Object.values(lanes).forEach(resetLane);
+  resetPackets();
+  origin = null; ended = false;
+  render();
+}
+
+// Novo teste = 3 s sem nenhum evento (mensagem ou pacote).
+function touch(t) {
+  if (t - lastT > IDLE_RESET_MS) { resetAll(); origin = t; }
+  lastT = Math.max(lastT, t); lastWall = performance.now(); ended = false;
+  return t - origin;
+}
+
+function onMessage(e) {
+  const l = lanes[e.proto];
+  if (!l) return;
+  const t = touch(e.t);
+  l.events.push({ seq: e.seq, t, interval: e.interval });
+
+  const cell = l.cells[e.seq - 1];
+  if (l.got.has(e.seq)) {
+    l.dups++;
+    if (cell) cell.classList.add("dup");
+  } else {
+    l.got.add(e.seq);
+    if (cell) {
+      cell.className = "cell got" + (e.interval > LATE_MS ? " late" : "");
+      cell.title = `seq ${e.seq} · ${e.interval.toFixed(1)} ms · em ${(t / 1000).toFixed(2)} s`;
+    }
+  }
+  l.maxSeq = Math.max(l.maxSeq, e.seq);
+  l.maxInt = Math.max(l.maxInt, e.interval);
+  if (e.interval > LATE_MS) l.stalls++;
+  scheduleRender();
+}
+
+function missingCount(l) {
+  const upTo = ended ? TOTAL : l.maxSeq;   // no fim, o que não chegou até 100 também falta
+  let n = 0;
+  for (let s = 1; s <= upTo; s++) {
+    const c = l.cells[s - 1];
+    if (!l.got.has(s)) { n++; if (c) c.classList.add("miss"); }
+  }
+  return n;
+}
+
+function render() {
+  const css = getComputedStyle(document.documentElement);
+  const colors = {
+    TCP: css.getPropertyValue("--tcp").trim(), UDP: css.getPropertyValue("--udp").trim(),
+    late: css.getPropertyValue("--late").trim(), line: css.getPropertyValue("--line").trim(),
+    muted: css.getPropertyValue("--muted").trim(),
+  };
+  const maxT = Math.max(0, ...Object.values(lanes).flatMap(l => l.events.map(ev => ev.t)));
+  const span = Math.max(6000, maxT + 300);
+
+  for (const l of Object.values(lanes)) {
+    const miss = missingCount(l);
+    const expected = ended ? TOTAL : l.maxSeq;   // durante o teste: só o que já deveria ter chegado
+    l.stats.got.value = l.got.size;
+    l.stats.miss.value = miss;
+    l.stats.loss.value = expected ? `${(miss / expected * 100).toFixed(1)}%` : "0%";
+    l.stats.stalls.value = l.stalls;
+    l.stats.maxInt.value = `${Math.round(l.maxInt)} ms`;
+    l.stats.dups.value = l.dups;
+    drawTimeline(l, span, colors);
+  }
+  renderPacketCount();
+}
+
+function drawTimeline(l, span, colors) {
+  const cv = l.canvas, dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const x = t => (t / span) * w;
+  const axisY = h - 16;
+
+  ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "center";
+  for (let s = 0; s * 1000 <= span; s++) {
+    ctx.fillStyle = colors.line; ctx.fillRect(Math.round(x(s * 1000)), 0, 1, axisY);
+    ctx.fillStyle = colors.muted; ctx.fillText(`${s}s`, Math.min(w - 8, Math.max(8, x(s * 1000))), h - 3);
+  }
+  ctx.globalAlpha = 0.28; ctx.fillStyle = colors.late;
+  for (const ev of l.events) {
+    if (ev.interval > LATE_MS) ctx.fillRect(x(ev.t - ev.interval), 4, Math.max(1, x(ev.interval)), axisY - 8);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = colors[l.proto];
+  for (const ev of l.events) ctx.fillRect(Math.round(x(ev.t)) - 1, 10, 2, axisY - 20);
+}
+
+let pending = false;
+function scheduleRender() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { pending = false; render(); });
+}
+
+// ------------------------------------------------------------ pacotes
+
+const pk = {
+  list: document.getElementById("pk-list"),
+  empty: document.getElementById("pk-empty"),
+  count: document.getElementById("pk-count"),
+  rows: [],
+};
+
+function resetPackets() {
+  pk.rows.forEach(r => r.remove());
+  pk.rows = [];
+  pk.empty.style.display = "";
+}
+
+function classify(p) {
+  const n = p.notes.join(" ").toLowerCase();
+  if (n.includes("retransmission")) return "retx";
+  if (n.includes("duplicate ack")) return "dupack";
+  if (p.proto === "UDP") return "udp";
+  if (p.flags.some(f => f === "SYN" || f === "FIN" || f === "RST")) return "ctl";
+  if (p.len > 0) return "data";
+  return "ack";
+}
+
+function msgText(p) {
+  return p.msgs.length ? ` · msg ${p.msgs.join(", ")}` : "";
+}
+
+function shortLabel(p) {
+  if (p.proto === "UDP") return `UDP · ${p.len} B${msgText(p)}`;
+  let s = p.flags.join(", ");
+  if (p.len > 0) s += ` · seq ${p.seq} · ${p.len} B${msgText(p)}`;
+  else if (p.flags.includes("ACK")) s += ` · ack ${p.ack}`;
+  if (p.kind === "retx") s = "RETRANSMISSÃO · " + s;
+  if (p.kind === "dupack") s = "ACK DUPLICADO · " + s;
+  return s;
+}
+
+const NOTE_PT = [
+  ["fast retransmission", "Retransmissão rápida: o remetente recebeu ACKs duplicados e reenviou sem esperar o tempo limite."],
+  ["spurious retransmission", "Retransmissão desnecessária: o dado já tinha chegado."],
+  ["retransmission", "Retransmissão: o remetente reenviou um segmento que não foi confirmado."],
+  ["duplicate ack", "ACK duplicado: o receptor repete até onde recebeu, pedindo o que falta."],
+  ["previous segment", "Segmento anterior não capturado: houve uma perda logo antes deste pacote."],
+  ["acked segment that wasn't captured", "Confirma um segmento que a captura não viu."],
+  ["out-of-order", "Fora de ordem."],
+  ["connection establish request", "Pedido de conexão (1º passo do handshake)."],
+  ["connection establish acknowledge", "Aceite da conexão (2º passo do handshake)."],
+  ["connection finish", "Pedido de encerramento da conexão."],
+  ["initiates the connection closing", "Este lado começa a fechar a conexão."],
+  ["undergoes the connection closing", "Este lado responde ao fechamento."],
+  ["connection reset", "Conexão interrompida à força (RST)."],
+];
+function translate(note) {
+  const n = note.toLowerCase();
+  const hit = NOTE_PT.find(([en]) => n.includes(en));
+  return hit ? hit[1] : note;
+}
+
+function explain(p) {
+  if (p.proto === "UDP") return "Datagrama UDP: vai sozinho, sem confirmação e sem número de sequência na camada 4.";
+  if (p.kind === "retx" || p.kind === "dupack") return "";
+  const f = p.flags;
+  if (f.includes("SYN") && f.includes("ACK")) return "2º passo do handshake: o receptor aceita a conexão.";
+  if (f.includes("SYN")) return "1º passo do handshake: o remetente pede para conectar.";
+  if (f.includes("FIN")) return "Encerramento: este lado não vai mais enviar dados.";
+  if (f.includes("RST")) return "Reset: a conexão foi derrubada.";
+  if (p.len > 0) return `Dados: bytes ${p.seq} a ${p.seq + p.len - 1} do fluxo.`;
+  return `Confirmação: recebi tudo até o byte ${p.ack - 1}; espero o ${p.ack}.`;
+}
+
+function tipHTML(p) {
+  const dir = p.toReceiver ? "remetente → receptor" : "receptor → remetente";
+  const rows = [
+    ["De", `${p.src}:${p.sport}`], ["Para", `${p.dst}:${p.dport}`], ["Hora", `${(p.rel / 1000).toFixed(3)} s`],
+  ];
+  if (p.proto === "TCP") rows.push(["Flags", p.flags.join(", ") || "—"], ["Seq", p.seq], ["Ack", p.ack]);
+  rows.push(["Dados", `${p.len} bytes`]);
+  if (p.msgs.length) rows.push(["Mensagem", p.msgs.map(m => `seq ${m}`).join(", ")]);
+  rows.push(["Quadro", `${p.frameLen} bytes no fio`]);
+  const head = p.proto === "TCP" ? "TCP (20+ B)" : "UDP (8 B)";
+  let notes = [...new Set(p.notes.map(translate))];
+  if (notes.some(n => n.startsWith("Retransmissão rápida") || n.startsWith("Retransmissão desnecessária"))) {
+    notes = notes.filter(n => !n.startsWith("Retransmissão: "));  // a específica já explica
+  }
+  const ex = explain(p);
+  return `<b>${p.proto} · ${dir}</b>
+    ${ex ? `<div>${ex}</div>` : ""}
+    <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${notes.map(n => `<div class="note">${n}</div>`).join("")}
+    <div class="layers">Camadas: Ethernet (14 B) → IPv4 (20 B) → ${head}${p.len ? ` → seus ${p.len} B` : ""}</div>`;
+}
+
+function onPacket(p) {
+  p.rel = touch(p.t);
+  p.kind = classify(p);
+  const atBottom = pk.list.scrollTop + pk.list.clientHeight >= pk.list.scrollHeight - 30;
+
+  const row = document.createElement("div");
+  row.className = `pkt p-${p.proto} k-${p.kind} ${p.toReceiver ? "to-rx" : "to-tx"}`;
+  row.innerHTML = `<span class="pt">${(p.rel / 1000).toFixed(3)}</span><div class="wire"><span class="lbl"></span></div>`;
+  row.querySelector(".lbl").textContent = shortLabel(p);
+  row._p = p;
+  pk.empty.style.display = "none";
+  pk.list.appendChild(row);
+  pk.rows.push(row);
+
+  if (atBottom) pk.list.scrollTop = pk.list.scrollHeight;
+  scheduleRender();
+}
+
+function renderPacketCount() {
+  const n = { total: pk.rows.length, retx: 0, dupack: 0 };
+  for (const r of pk.rows) if (r._p.kind in n) n[r._p.kind]++;
+  pk.count.textContent = n.total
+    ? `${n.total} pacotes · ${n.retx} ${n.retx === 1 ? "retransmissão" : "retransmissões"} · ${n.dupack} ${n.dupack === 1 ? "ACK duplicado" : "ACKs duplicados"}`
+    : "";
+}
+
+// filtros
+document.querySelectorAll("[data-hide]").forEach(cb => {
+  cb.addEventListener("change", () => pk.list.classList.toggle(`hide-${cb.dataset.hide}`, !cb.checked));
+});
+
+// dica ao passar o mouse
+const tip = document.getElementById("tip");
+function placeTip(ev) {
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = `${Math.max(8, x)}px`; tip.style.top = `${Math.max(8, y)}px`;
+}
+pk.list.addEventListener("mousemove", ev => {
+  const row = ev.target.closest(".pkt");
+  if (!row) { tip.style.display = "none"; return; }
+  if (tip._row !== row) { tip.innerHTML = tipHTML(row._p); tip._row = row; }
+  tip.style.display = "block";
+  placeTip(ev);
+});
+pk.list.addEventListener("mouseleave", () => { tip.style.display = "none"; tip._row = null; });
+
+// quadrado da grade -> destaca os pacotes que carregaram essa mensagem
+for (const l of Object.values(lanes)) {
+  const grid = l.el.querySelector(".grid");
+  grid.addEventListener("mouseover", ev => {
+    const cell = ev.target.closest(".cell");
+    if (!cell) return;
+    const seq = Number(cell.dataset.seq);
+    let first = null;
+    for (const r of pk.rows) {
+      const hit = r._p.proto === l.proto && r._p.msgs.includes(seq);
+      r.classList.toggle("hl", hit);
+      if (hit && !first) first = r;
+    }
+    if (first) pk.list.scrollTop = first.offsetTop - pk.list.offsetTop - pk.list.clientHeight / 2;
+  });
+  grid.addEventListener("mouseleave", () => pk.rows.forEach(r => r.classList.remove("hl")));
+}
+
+// fim do teste: marca como faltando o que não chegou até o 100
+setInterval(() => {
+  if (!ended && origin !== null && performance.now() - lastWall > END_MS) { ended = true; render(); }
+}, 500);
+
+window.addEventListener("resize", scheduleRender);
+document.getElementById("clear").addEventListener("click", resetAll);
+
+const status = document.getElementById("status");
+const es = new EventSource("/events");
+es.onopen = () => { status.textContent = "conectado"; status.classList.add("on"); };
+es.onerror = () => { status.textContent = "reconectando…"; status.classList.remove("on"); };
+es.onmessage = m => {
+  const e = JSON.parse(m.data);
+  if (e.kind === "pkt") onPacket(e); else onMessage(e);
+};
+
+resetAll();
+</script>
+</body>
+</html>
