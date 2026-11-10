@@ -18,6 +18,8 @@ O projeto funciona de forma simples, apenas para elucidar como funcionam ambos o
 | `dashboard.py` | PC | Roda o `receiver.py` em laço, captura os pacotes com o `tshark` e serve o painel em `http://localhost:8000`. |
 | `dashboard.html` | navegador | Painel: grade de 100 blocos por protocolo, linha do tempo das chegadas e lista de pacotes da rede. |
 
+O `sender.py` e o `receiver.py` foram escritos por mim. O painel (`dashboard.py` e `dashboard.html`) foi feito com o Claude, porque o foco do projeto era entender as transmissões, e não construir o visual.
+
 Cada mensagem tem 12 bytes, montados com `struct.pack("!IQ", seq, time.time_ns())`: 4 bytes de número de sequência e 8 de horário de envio, na ordem de bytes da rede.
 
 Como o TCP entrega um fluxo de bytes sem fronteiras, o receptor usa `recv_exact()` para ler exatamente 12 bytes por mensagem. No UDP, cada `recvfrom()` já traz um datagrama inteiro.
